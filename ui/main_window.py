@@ -11,21 +11,18 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 
 from algorithms.sorting import ALL_SORTS
+from algorithms.benchmark_worker import BenchmarkWorker
 
 
-# Locate books.db relative to this file (works from anywhere)
+# Locate books.db relative to this file
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "books.db")
 
 
-# Column headers and their indices in the SQL result
 COLUMNS = ["Title", "Author", "Year", "Publisher",
            "ISBN", "Pages", "Language", "Subject", "Editions"]
 
 
-# ------------------------------------------------------------------
-# STYLESHEET — modern dark theme
-# ------------------------------------------------------------------
 STYLESHEET = """
 QMainWindow { background-color: #1e1e2e; }
 QWidget {
@@ -122,20 +119,19 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DSA Project - Books Database")
-        self.resize(1500, 850)
+        self.resize(1500, 900)
         self.setStyleSheet(STYLESHEET)
 
-        # Holds the current data as list of tuples (unsorted copy)
         self.raw_data = []
+        self.benchmark_worker = None
 
-        # Main container
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        # --- Top bar: title + count ---
+        # --- Top bar ---
         top_bar = QHBoxLayout()
         self.title_label = QLabel("📚 Books Database")
         self.title_label.setObjectName("title_label")
@@ -188,19 +184,57 @@ class MainWindow(QMainWindow):
         self.algo_info.setObjectName("algo_info")
         layout.addWidget(self.algo_info)
 
-        # --- Progress bar (for future scraping controls) ---
+        # --- Benchmark panel ---
+        bench_panel = QFrame()
+        bench_panel.setObjectName("sort_panel")
+        bench_layout = QHBoxLayout(bench_panel)
+        bench_layout.setSpacing(10)
+
+        bench_layout.addWidget(QLabel("📊 Benchmark — Column:"))
+        self.benchmark_column_combo = QComboBox()
+        self.benchmark_column_combo.addItems(COLUMNS)
+        bench_layout.addWidget(self.benchmark_column_combo)
+
+        self.benchmark_btn = QPushButton("▶  Run Benchmark")
+        self.benchmark_btn.clicked.connect(self.run_benchmark)
+        bench_layout.addWidget(self.benchmark_btn)
+
+        self.benchmark_status = QLabel("")
+        self.benchmark_status.setObjectName("algo_info")
+        bench_layout.addWidget(self.benchmark_status)
+
+        bench_layout.addStretch()
+        layout.addWidget(bench_panel)
+
+        # --- Benchmark results table (hidden until run) ---
+        self.benchmark_table = QTableWidget()
+        self.benchmark_table.setColumnCount(5)
+        self.benchmark_table.setHorizontalHeaderLabels(
+            ["Algorithm", "Time (ms)", "Comparisons", "Swaps", "Complexity / Stable"]
+        )
+        self.benchmark_table.setAlternatingRowColors(True)
+        self.benchmark_table.verticalHeader().setDefaultSectionSize(28)
+        self.benchmark_table.setShowGrid(False)
+        self.benchmark_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch
+        )
+        self.benchmark_table.setVisible(False)
+        self.benchmark_table.setMaximumHeight(320)
+        layout.addWidget(self.benchmark_table)
+
+        # --- Progress bar (hidden until needed) ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_bar.setMaximum(15000)
-        self.progress_bar.setVisible(False)   # hide until needed
+        self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
-        # --- The table ---
+        # --- Main data table ---
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.table.setSortingEnabled(False)   # we handle sorting ourselves
+        self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(30)
         self.table.setShowGrid(False)
@@ -237,7 +271,6 @@ class MainWindow(QMainWindow):
         self.count_label.setText(f"Total: {len(self.raw_data):,} books")
 
     def populate_table(self, rows):
-        """Fill the table with the given rows."""
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, value in enumerate(row):
@@ -258,11 +291,8 @@ class MainWindow(QMainWindow):
     # SORTING
     # ----------------------------------------------------------------
     def update_algo_info(self, algo_name):
-        """Update the complexity/stability info label below the combo."""
-        from algorithms.sorting import ALL_SORTS
         if algo_name not in ALL_SORTS:
             return
-        # Run once on an empty list to get metadata
         sample = ALL_SORTS[algo_name]([], 0)
         stable_str = "Stable ✅" if sample.stable else "Not stable ❌"
         self.algo_info.setText(
@@ -270,12 +300,10 @@ class MainWindow(QMainWindow):
         )
 
     def run_sort(self):
-        """Sort the raw data by the selected column with the selected algorithm."""
         col_index = self.column_combo.currentIndex()
         algo_name = self.algo_combo.currentText()
         algo_func = ALL_SORTS[algo_name]
 
-        # Disable button to prevent double-click
         self.sort_btn.setEnabled(False)
         self.sort_btn.setText("Sorting…")
         QApplication.processEvents()
@@ -288,19 +316,72 @@ class MainWindow(QMainWindow):
             self.sort_btn.setText("🔀  Sort")
             return
 
-        # Update table with sorted rows
         self.populate_table(result.sorted_data)
 
-        # Update metrics
         self.time_label.setText(f"⏱ Time: {result.time_ms:.2f} ms")
-        self.comparisons_label.setText(
-            f"🔍 Comparisons: {result.comparisons:,}"
-        )
+        self.comparisons_label.setText(f"🔍 Comparisons: {result.comparisons:,}")
         self.swaps_label.setText(f"🔄 Swaps: {result.swaps:,}")
 
-        # Restore button
         self.sort_btn.setEnabled(True)
         self.sort_btn.setText("🔀  Sort")
+
+    # ----------------------------------------------------------------
+    # BENCHMARK
+    # ----------------------------------------------------------------
+    def run_benchmark(self):
+        if self.benchmark_worker and self.benchmark_worker.isRunning():
+            return
+
+        if not self.raw_data:
+            QMessageBox.warning(self, "No data", "Load data first.")
+            return
+
+        col_index = self.benchmark_column_combo.currentIndex()
+
+        self.benchmark_table.setRowCount(0)
+        self.benchmark_table.setVisible(True)
+
+        self.benchmark_btn.setEnabled(False)
+        self.benchmark_btn.setText("Running…")
+        self.sort_btn.setEnabled(False)
+
+        self.benchmark_worker = BenchmarkWorker(self.raw_data, col_index)
+        self.benchmark_worker.progress.connect(self.on_benchmark_progress)
+        self.benchmark_worker.result.connect(self.on_benchmark_result)
+        self.benchmark_worker.finished_all.connect(self.on_benchmark_finished)
+        self.benchmark_worker.start()
+
+    def on_benchmark_progress(self, current, total, algo_name):
+        self.benchmark_status.setText(
+            f"⏳ Running {algo_name}  ({current}/{total})…"
+        )
+
+    def on_benchmark_result(self, row):
+        r = self.benchmark_table.rowCount()
+        self.benchmark_table.insertRow(r)
+
+        stable_str = "✅ Stable" if row["stable"] else "❌ Not stable"
+
+        values = [
+            row["algorithm"],
+            f"{row['time_ms']:.2f}" if row["time_ms"] >= 0 else "error",
+            f"{row['comparisons']:,}" if row["comparisons"] >= 0 else "—",
+            f"{row['swaps']:,}" if row["swaps"] >= 0 else "—",
+            f"{row['complexity']}  •  {stable_str}",
+        ]
+
+        for c, val in enumerate(values):
+            item = QTableWidgetItem(str(val))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.benchmark_table.setItem(r, c, item)
+
+    def on_benchmark_finished(self, results):
+        self.benchmark_status.setText(
+            f"✅ Benchmark complete — {len(results)} algorithms tested"
+        )
+        self.benchmark_btn.setEnabled(True)
+        self.benchmark_btn.setText("▶  Run Benchmark")
+        self.sort_btn.setEnabled(True)
 
 
 def main():
