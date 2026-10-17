@@ -55,6 +55,9 @@ class BookScraper:
                             self.seen_keys.add(key)
                             self.books.append(doc)
                             self.progress = len(self.books)
+                            if self.progress % 1000 == 0:
+                                self.save_json("books_partial.json")
+                                print(f"  → Auto-saved at {self.progress}")
 
                     offset += self.limit_per_page
                     print(f"Progress: {self.progress} / {self.target}")

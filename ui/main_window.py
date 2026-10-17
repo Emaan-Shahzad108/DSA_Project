@@ -5,7 +5,8 @@ import sqlite3
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QLabel, QPushButton,
-    QProgressBar, QHeaderView, QMessageBox, QComboBox, QFrame
+    QProgressBar, QHeaderView, QMessageBox, QComboBox, QFrame,
+    QLineEdit, QCheckBox, QSplitter
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
@@ -14,14 +15,11 @@ from algorithms.sorting import ALL_SORTS
 from algorithms.benchmark_worker import BenchmarkWorker
 
 
-# Locate books.db relative to this file
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "books.db")
 
-
 COLUMNS = ["Title", "Author", "Year", "Publisher",
            "ISBN", "Pages", "Language", "Subject", "Editions"]
-
 
 STYLESHEET = """
 QMainWindow { background-color: #1e1e2e; }
@@ -47,12 +45,12 @@ QLabel#algo_info {
 QFrame#sort_panel {
     background-color: #252535; border-radius: 8px; padding: 10px;
 }
-QComboBox {
+QComboBox, QLineEdit {
     background-color: #2d2d44; color: #e0e0e0;
     border: 1px solid #33334d; border-radius: 6px;
-    padding: 8px 12px; font-size: 13px; min-width: 150px;
+    padding: 8px 12px; font-size: 13px; min-width: 120px;
 }
-QComboBox:hover { border: 1px solid #00d4aa; }
+QComboBox:hover, QLineEdit:hover { border: 1px solid #00d4aa; }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
     background-color: #2d2d44; color: #e0e0e0;
@@ -60,6 +58,8 @@ QComboBox QAbstractItemView {
     selection-color: #1e1e2e;
     border: 1px solid #33334d;
 }
+QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }
+QCheckBox::indicator { width: 18px; height: 18px; }
 QPushButton {
     background-color: #00d4aa; color: #1e1e2e;
     border: none; padding: 10px 20px;
@@ -68,6 +68,8 @@ QPushButton {
 QPushButton:hover { background-color: #00e8bb; }
 QPushButton:pressed { background-color: #00b894; }
 QPushButton:disabled { background-color: #444455; color: #888899; }
+QPushButton#clear_btn { background-color: #e74c3c; }
+QPushButton#clear_btn:hover { background-color: #c0392b; }
 QTableWidget {
     background-color: #252535;
     alternate-background-color: #2a2a3d;
@@ -89,13 +91,6 @@ QHeaderView::section {
     font-weight: bold; font-size: 13px;
 }
 QHeaderView::section:hover { background-color: #3a3a55; }
-QProgressBar {
-    background-color: #252535;
-    border: 1px solid #33334d; border-radius: 6px;
-    text-align: center; color: #e0e0e0;
-    font-weight: bold; height: 22px;
-}
-QProgressBar::chunk { background-color: #00d4aa; border-radius: 5px; }
 QScrollBar:vertical {
     background: #1e1e2e; width: 12px; margin: 0;
 }
@@ -112,6 +107,13 @@ QScrollBar::handle:horizontal {
 }
 QScrollBar::handle:horizontal:hover { background: #00d4aa; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QSplitter::handle {
+    background-color: #33334d;
+    height: 6px;
+}
+QSplitter::handle:hover {
+    background-color: #00d4aa;
+}
 """
 
 
@@ -119,19 +121,28 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DSA Project - Books Database")
-        self.resize(1500, 900)
+        self.resize(1500, 950)  # Made window slightly taller
         self.setStyleSheet(STYLESHEET)
 
         self.raw_data = []
+        self.filtered_data = []
         self.benchmark_worker = None
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(0)
 
-        # --- Top bar ---
+        # ==========================================
+        # TOP WIDGET (Controls)
+        # ==========================================
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(5) # Tight spacing
+
+        # Top bar
         top_bar = QHBoxLayout()
         self.title_label = QLabel("📚 Books Database")
         self.title_label.setObjectName("title_label")
@@ -140,9 +151,44 @@ class MainWindow(QMainWindow):
         self.count_label = QLabel("Total: 0")
         self.count_label.setObjectName("count_label")
         top_bar.addWidget(self.count_label)
-        layout.addLayout(top_bar)
+        top_layout.addLayout(top_bar)
 
-        # --- Sort panel ---
+        # Search Panel
+        search_panel = QFrame()
+        search_panel.setObjectName("sort_panel")
+        search_layout = QHBoxLayout(search_panel)
+        search_layout.setSpacing(10)
+
+        search_layout.addWidget(QLabel("🔍 Search:"))
+        self.search_col_combo = QComboBox()
+        self.search_col_combo.addItems(COLUMNS)
+        search_layout.addWidget(self.search_col_combo)
+
+        self.search_cond_combo = QComboBox()
+        self.search_cond_combo.addItems([
+            "Contains", "Starts With", "Ends With", "Equals", 
+            "Greater Than", "Less Than"
+        ])
+        search_layout.addWidget(self.search_cond_combo)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Type search query here…")
+        self.search_input.returnPressed.connect(self.run_search)
+        search_layout.addWidget(self.search_input)
+
+        self.search_btn = QPushButton("Apply")
+        self.search_btn.clicked.connect(self.run_search)
+        search_layout.addWidget(self.search_btn)
+
+        self.clear_btn = QPushButton("✖ Clear")
+        self.clear_btn.setObjectName("clear_btn")
+        self.clear_btn.clicked.connect(self.clear_search)
+        search_layout.addWidget(self.clear_btn)
+
+        search_layout.addStretch()
+        top_layout.addWidget(search_panel)
+
+        # Sort panel
         sort_panel = QFrame()
         sort_panel.setObjectName("sort_panel")
         sort_layout = QHBoxLayout(sort_panel)
@@ -163,10 +209,13 @@ class MainWindow(QMainWindow):
         self.sort_btn.clicked.connect(self.run_sort)
         sort_layout.addWidget(self.sort_btn)
 
-        sort_layout.addStretch()
-        layout.addWidget(sort_panel)
+        self.scope_checkbox = QCheckBox("Sort only filtered results")
+        sort_layout.addWidget(self.scope_checkbox)
 
-        # --- Metrics panel ---
+        sort_layout.addStretch()
+        top_layout.addWidget(sort_panel)
+
+        # Metrics panel & Algo Info (Side by side to save space)
         metrics_layout = QHBoxLayout()
         self.time_label = QLabel("⏱ Time: —")
         self.time_label.setObjectName("metrics_label")
@@ -174,17 +223,18 @@ class MainWindow(QMainWindow):
         self.comparisons_label.setObjectName("metrics_label")
         self.swaps_label = QLabel("🔄 Swaps: —")
         self.swaps_label.setObjectName("metrics_label")
+        
+        self.algo_info = QLabel("")
+        self.algo_info.setObjectName("algo_info")
+
         metrics_layout.addWidget(self.time_label)
         metrics_layout.addWidget(self.comparisons_label)
         metrics_layout.addWidget(self.swaps_label)
         metrics_layout.addStretch()
-        layout.addLayout(metrics_layout)
+        metrics_layout.addWidget(self.algo_info)
+        top_layout.addLayout(metrics_layout)
 
-        self.algo_info = QLabel("")
-        self.algo_info.setObjectName("algo_info")
-        layout.addWidget(self.algo_info)
-
-        # --- Benchmark panel ---
+        # Benchmark panel
         bench_panel = QFrame()
         bench_panel.setObjectName("sort_panel")
         bench_layout = QHBoxLayout(bench_panel)
@@ -204,9 +254,9 @@ class MainWindow(QMainWindow):
         bench_layout.addWidget(self.benchmark_status)
 
         bench_layout.addStretch()
-        layout.addWidget(bench_panel)
+        top_layout.addWidget(bench_panel)
 
-        # --- Benchmark results table (hidden until run) ---
+        # Benchmark Table (Hidden initially)
         self.benchmark_table = QTableWidget()
         self.benchmark_table.setColumnCount(5)
         self.benchmark_table.setHorizontalHeaderLabels(
@@ -215,21 +265,13 @@ class MainWindow(QMainWindow):
         self.benchmark_table.setAlternatingRowColors(True)
         self.benchmark_table.verticalHeader().setDefaultSectionSize(28)
         self.benchmark_table.setShowGrid(False)
-        self.benchmark_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
+        self.benchmark_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.benchmark_table.setVisible(False)
-        self.benchmark_table.setMaximumHeight(320)
-        layout.addWidget(self.benchmark_table)
+        top_layout.addWidget(self.benchmark_table)
 
-        # --- Progress bar (hidden until needed) ---
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_bar.setMaximum(15000)
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-
-        # --- Main data table ---
+        # ==========================================
+        # BOTTOM WIDGET (Main Table)
+        # ==========================================
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
@@ -238,7 +280,18 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(30)
         self.table.setShowGrid(False)
-        layout.addWidget(self.table)
+
+        # ==========================================
+        # THE SPLITTER (The Fix)
+        # ==========================================
+        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter.addWidget(top_widget)
+        self.splitter.addWidget(self.table)
+        
+        # THIS IS THE MAGIC LINE: 200px for top, 800px for table (80% of space!)
+        self.splitter.setSizes([200, 800])
+        
+        main_layout.addWidget(self.splitter)
 
         # --- Initial load ---
         self.load_books()
@@ -249,8 +302,7 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
     def load_books(self):
         if not os.path.exists(DB_PATH):
-            QMessageBox.critical(self, "Missing DB",
-                                 f"books.db not found at:\n{DB_PATH}")
+            QMessageBox.critical(self, "Missing DB", f"books.db not found at:\n{DB_PATH}")
             return
 
         try:
@@ -262,13 +314,22 @@ class MainWindow(QMainWindow):
                 FROM books
             """)
             self.raw_data = cur.fetchall()
+            self.filtered_data = list(self.raw_data)
             conn.close()
         except Exception as e:
             QMessageBox.critical(self, "Database Error", str(e))
             return
 
-        self.populate_table(self.raw_data)
-        self.count_label.setText(f"Total: {len(self.raw_data):,} books")
+        self.populate_table(self.filtered_data)
+        self.update_count_label()
+
+    def update_count_label(self):
+        total = len(self.raw_data)
+        current = len(self.filtered_data)
+        if current == total:
+            self.count_label.setText(f"Total: {total:,} books")
+        else:
+            self.count_label.setText(f"Showing: {current:,} of {total:,} books")
 
     def populate_table(self, rows):
         self.table.setRowCount(len(rows))
@@ -288,6 +349,57 @@ class MainWindow(QMainWindow):
             self.table.setColumnWidth(i, w)
 
     # ----------------------------------------------------------------
+    # SEARCHING
+    # ----------------------------------------------------------------
+    def run_search(self):
+        col_index = self.search_col_combo.currentIndex()
+        condition = self.search_cond_combo.currentText()
+        query = self.search_input.text().strip()
+
+        if not query:
+            self.clear_search()
+            return
+
+        results = []
+        query_lower = query.lower()
+
+        for row in self.raw_data:
+            val = row[col_index]
+            if val is None:
+                continue
+                
+            val_str = str(val).lower()
+            
+            match = False
+            if condition == "Contains":
+                match = query_lower in val_str
+            elif condition == "Starts With":
+                match = val_str.startswith(query_lower)
+            elif condition == "Ends With":
+                match = val_str.endswith(query_lower)
+            elif condition == "Equals":
+                match = val_str == query_lower
+            elif condition == "Greater Than":
+                try: match = float(val_str) > float(query_lower)
+                except ValueError: match = val_str > query_lower
+            elif condition == "Less Than":
+                try: match = float(val_str) < float(query_lower)
+                except ValueError: match = val_str < query_lower
+
+            if match:
+                results.append(row)
+
+        self.filtered_data = results
+        self.populate_table(self.filtered_data)
+        self.update_count_label()
+
+    def clear_search(self):
+        self.search_input.clear()
+        self.filtered_data = list(self.raw_data)
+        self.populate_table(self.filtered_data)
+        self.update_count_label()
+
+    # ----------------------------------------------------------------
     # SORTING
     # ----------------------------------------------------------------
     def update_algo_info(self, algo_name):
@@ -304,19 +416,33 @@ class MainWindow(QMainWindow):
         algo_name = self.algo_combo.currentText()
         algo_func = ALL_SORTS[algo_name]
 
+        if self.scope_checkbox.isChecked():
+            data_to_sort = self.filtered_data
+        else:
+            data_to_sort = self.raw_data
+
+        if not data_to_sort:
+            return
+
         self.sort_btn.setEnabled(False)
         self.sort_btn.setText("Sorting…")
         QApplication.processEvents()
 
         try:
-            result = algo_func(self.raw_data, col_index)
+            result = algo_func(data_to_sort, col_index)
         except Exception as e:
             QMessageBox.critical(self, "Sort Error", str(e))
             self.sort_btn.setEnabled(True)
             self.sort_btn.setText("🔀  Sort")
             return
 
-        self.populate_table(result.sorted_data)
+        if self.scope_checkbox.isChecked():
+            self.filtered_data = result.sorted_data
+        else:
+            self.raw_data = result.sorted_data
+            self.filtered_data = list(self.raw_data)
+
+        self.populate_table(self.filtered_data)
 
         self.time_label.setText(f"⏱ Time: {result.time_ms:.2f} ms")
         self.comparisons_label.setText(f"🔍 Comparisons: {result.comparisons:,}")
@@ -340,6 +466,7 @@ class MainWindow(QMainWindow):
 
         self.benchmark_table.setRowCount(0)
         self.benchmark_table.setVisible(True)
+        self.benchmark_table.setMaximumHeight(200) # Keep it from eating the table space
 
         self.benchmark_btn.setEnabled(False)
         self.benchmark_btn.setText("Running…")
@@ -352,9 +479,7 @@ class MainWindow(QMainWindow):
         self.benchmark_worker.start()
 
     def on_benchmark_progress(self, current, total, algo_name):
-        self.benchmark_status.setText(
-            f"⏳ Running {algo_name}  ({current}/{total})…"
-        )
+        self.benchmark_status.setText(f"⏳ {algo_name}  ({current}/{total})…")
 
     def on_benchmark_result(self, row):
         r = self.benchmark_table.rowCount()
@@ -376,9 +501,7 @@ class MainWindow(QMainWindow):
             self.benchmark_table.setItem(r, c, item)
 
     def on_benchmark_finished(self, results):
-        self.benchmark_status.setText(
-            f"✅ Benchmark complete — {len(results)} algorithms tested"
-        )
+        self.benchmark_status.setText(f"✅ {len(results)} algorithms tested")
         self.benchmark_btn.setEnabled(True)
         self.benchmark_btn.setText("▶  Run Benchmark")
         self.sort_btn.setEnabled(True)
