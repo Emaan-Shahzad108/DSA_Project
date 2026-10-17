@@ -133,7 +133,7 @@ class MainWindow(QMainWindow):
         top_widget = QWidget()
         top_layout = QVBoxLayout(top_widget)
         top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(4) # Extremely tight spacing
+        top_layout.setSpacing(4)
 
         # 1. Top bar
         top_bar = QHBoxLayout()
@@ -146,36 +146,63 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.count_label)
         top_layout.addLayout(top_bar)
 
-        # 2. Search Panel
+        # 2. Composite Search Panel (UPDATED)
         search_panel = QFrame()
         search_panel.setObjectName("sort_panel")
-        search_layout = QHBoxLayout(search_panel)
+        search_layout = QVBoxLayout(search_panel)
         search_layout.setSpacing(6)
         search_layout.setContentsMargins(6, 6, 6, 6)
 
-        search_layout.addWidget(QLabel("🔍 Search:"))
+        # Search Row 1
+        s_row1 = QHBoxLayout()
+        s_row1.addWidget(QLabel("🔍 Search 1:"))
         self.search_col_combo = QComboBox()
         self.search_col_combo.addItems(COLUMNS)
-        search_layout.addWidget(self.search_col_combo)
+        s_row1.addWidget(self.search_col_combo)
 
         self.search_cond_combo = QComboBox()
         self.search_cond_combo.addItems(["Contains", "Starts With", "Ends With", "Equals", "Greater Than", "Less Than"])
-        search_layout.addWidget(self.search_cond_combo)
+        s_row1.addWidget(self.search_cond_combo)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Type query…")
         self.search_input.returnPressed.connect(self.run_search)
-        search_layout.addWidget(self.search_input)
+        s_row1.addWidget(self.search_input)
+        search_layout.addLayout(s_row1)
 
-        self.search_btn = QPushButton("Apply")
+        # Search Row 2 (Composite Logic)
+        s_row2 = QHBoxLayout()
+        self.logic_combo = QComboBox()
+        self.logic_combo.addItems(["AND", "OR"])
+        s_row2.addWidget(self.logic_combo)
+
+        self.not_checkbox = QCheckBox("NOT")
+        s_row2.addWidget(self.not_checkbox)
+
+        s_row2.addWidget(QLabel("Search 2:"))
+        self.search_col_combo_2 = QComboBox()
+        self.search_col_combo_2.addItems(["- None -"] + COLUMNS)
+        s_row2.addWidget(self.search_col_combo_2)
+
+        self.search_cond_combo_2 = QComboBox()
+        self.search_cond_combo_2.addItems(["Contains", "Starts With", "Ends With", "Equals", "Greater Than", "Less Than"])
+        s_row2.addWidget(self.search_cond_combo_2)
+
+        self.search_input_2 = QLineEdit()
+        self.search_input_2.setPlaceholderText("Type query…")
+        self.search_input_2.returnPressed.connect(self.run_search)
+        s_row2.addWidget(self.search_input_2)
+
+        self.search_btn = QPushButton("Apply Filter")
         self.search_btn.clicked.connect(self.run_search)
-        search_layout.addWidget(self.search_btn)
+        s_row2.addWidget(self.search_btn)
 
         self.clear_btn = QPushButton("✖ Clear")
         self.clear_btn.setObjectName("clear_btn")
         self.clear_btn.clicked.connect(self.clear_search)
-        search_layout.addWidget(self.clear_btn)
-        search_layout.addStretch()
+        s_row2.addWidget(self.clear_btn)
+        s_row2.addStretch()
+        search_layout.addLayout(s_row2)
         top_layout.addWidget(search_panel)
 
         # 3. Multi-Level Sort Panel
@@ -270,8 +297,8 @@ class MainWindow(QMainWindow):
         self.benchmark_table.setVisible(False)
         top_layout.addWidget(self.benchmark_table)
 
-        # THIS IS THE ABSOLUTE FIX: Lock the top half to exactly 230 pixels
-        top_widget.setFixedHeight(230)
+        # Lock the top half to exactly 280 pixels (to fit new search row)
+        top_widget.setFixedHeight(280)
         
         # Add top widget to main layout without stretch
         main_layout.addWidget(top_widget, 0)
@@ -288,7 +315,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(30)
         self.table.setShowGrid(False)
 
-        # THIS IS THE ABSOLUTE FIX: Stretch=1 gives this table 100% of the remaining space!
+        # Stretch=1 gives this table 100% of the remaining space!
         main_layout.addWidget(self.table, 1)
 
         # --- Initial load ---
@@ -347,38 +374,75 @@ class MainWindow(QMainWindow):
             self.table.setColumnWidth(i, w)
 
     # ----------------------------------------------------------------
-    # SEARCHING
+    # COMPOSITE SEARCHING (AND/OR/NOT)
     # ----------------------------------------------------------------
     def run_search(self):
-        col_index = self.search_col_combo.currentIndex()
-        condition = self.search_cond_combo.currentText()
-        query = self.search_input.text().strip()
+        # Get Search 1 data
+        col1 = self.search_col_combo.currentIndex()
+        cond1 = self.search_cond_combo.currentText()
+        q1 = self.search_input.text().strip().lower()
 
-        if not query:
+        # Get Search 2 data
+        logic = self.logic_combo.currentText()
+        is_not = self.not_checkbox.isChecked()
+        col2_text = self.search_col_combo_2.currentText()
+        cond2 = self.search_cond_combo_2.currentText()
+        q2 = self.search_input_2.text().strip().lower()
+
+        if not q1 and not q2:
             self.clear_search()
             return
 
         results = []
-        query_lower = query.lower()
 
         for row in self.raw_data:
-            val = row[col_index]
-            if val is None: continue
-            val_str = str(val).lower()
-            
-            match = False
-            if condition == "Contains": match = query_lower in val_str
-            elif condition == "Starts With": match = val_str.startswith(query_lower)
-            elif condition == "Ends With": match = val_str.endswith(query_lower)
-            elif condition == "Equals": match = val_str == query_lower
-            elif condition == "Greater Than":
-                try: match = float(val_str) > float(query_lower)
-                except ValueError: match = val_str > query_lower
-            elif condition == "Less Than":
-                try: match = float(val_str) < float(query_lower)
-                except ValueError: match = val_str < query_lower
+            # 1. Evaluate Search 1
+            match1 = False
+            if q1:
+                val1 = str(row[col1]).lower()
+                if cond1 == "Contains": match1 = q1 in val1
+                elif cond1 == "Starts With": match1 = val1.startswith(q1)
+                elif cond1 == "Ends With": match1 = val1.endswith(q1)
+                elif cond1 == "Equals": match1 = val1 == q1
+                elif cond1 == "Greater Than":
+                    try: match1 = float(val1) > float(q1)
+                    except ValueError: match1 = val1 > q1
+                elif cond1 == "Less Than":
+                    try: match1 = float(val1) < float(q1)
+                    except ValueError: match1 = val1 < q1
+            else:
+                match1 = True # If no query in Search 1, treat as True
 
-            if match: results.append(row)
+            # 2. Evaluate Search 2
+            final_match = match1
+            if col2_text != "- None -" and q2:
+                col2 = COLUMNS.index(col2_text)
+                val2 = str(row[col2]).lower()
+                match2 = False
+
+                if cond2 == "Contains": match2 = q2 in val2
+                elif cond2 == "Starts With": match2 = val2.startswith(q2)
+                elif cond2 == "Ends With": match2 = val2.endswith(q2)
+                elif cond2 == "Equals": match2 = val2 == q2
+                elif cond2 == "Greater Than":
+                    try: match2 = float(val2) > float(q2)
+                    except ValueError: match2 = val2 > q2
+                elif cond2 == "Less Than":
+                    try: match2 = float(val2) < float(q2)
+                    except ValueError: match2 = val2 < q2
+
+                # Apply NOT logic
+                if is_not:
+                    match2 = not match2
+
+                # Apply AND / OR logic
+                if logic == "AND":
+                    final_match = match1 and match2
+                elif logic == "OR":
+                    final_match = match1 or match2
+
+            if final_match:
+                results.append(row)
 
         self.filtered_data = results
         self.populate_table(self.filtered_data)
@@ -386,6 +450,9 @@ class MainWindow(QMainWindow):
 
     def clear_search(self):
         self.search_input.clear()
+        self.search_input_2.clear()
+        self.search_col_combo_2.setCurrentIndex(0) # Reset to "- None -"
+        self.not_checkbox.setChecked(False)
         self.filtered_data = list(self.raw_data)
         self.populate_table(self.filtered_data)
         self.update_count_label()
@@ -449,7 +516,7 @@ class MainWindow(QMainWindow):
         col_index = self.benchmark_column_combo.currentIndex()
         self.benchmark_table.setRowCount(0)
         self.benchmark_table.setVisible(True)
-        self.benchmark_table.setMaximumHeight(150) # Limits benchmark table height
+        self.benchmark_table.setMaximumHeight(150)
 
         self.benchmark_btn.setEnabled(False)
         self.benchmark_btn.setText("Running…")
